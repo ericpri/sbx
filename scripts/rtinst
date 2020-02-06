@@ -730,6 +730,9 @@ if [ $dlflag = 0 ]; then
   rtdload enable
 fi
 
+rm /var/www/index.html
+touch /var/www/index.html
+
 ###############################
 ### INSTALL RTORRENT ###
 ###############################
