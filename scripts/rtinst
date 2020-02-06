@@ -8,6 +8,110 @@
 #
 #########################################################################################
 
+###############################
+### SET VARIABLES ###
+###############################
+
+PATH=/usr/local/bin:/usr/bin:/usr/local/sbin:/usr/sbin:/bin:/sbin
+
+# if left blank will install latest version of rtorrent, or set to a specific release E.G. '0.9.6' to install that release
+rtorrentrel=''
+
+#url's of the major components
+rt_url="http://rtorrent.net/downloads/"
+
+xmlrpc_url="https://svn.code.sf.net/p/xmlrpc-c/code/advanced/"
+xmlrpc_url_alt="https://github.com/mirror/xmlrpc-c"
+
+ru_url="https://github.com/Novik/ruTorrent/"
+adl_url="https://github.com/autodl-community/"
+
+if [ $(dpkg-query -W -f='${Status}' lsb-release 2>/dev/null | grep -c "ok installed") -eq 0 ]; then
+echo "Installing lsb-release"
+apt-get -yqq install lsb-release 2>&1 >> /dev/null
+fi
+
+fullrel=$(lsb_release -sd)
+osname=$(lsb_release -si)
+relno=$(lsb_release -sr | cut -d. -f1)
+
+# Fallback if lsb_release -si returns nothing
+if [ "$osname" = "" ]; then
+  osname=$(grep -oP '(?<=^ID=).+' /etc/os-release | tr -d '"')
+  osname=${osname^}
+fi
+
+# Fallback if lsb_release -sr returns nothing
+if [ "$relno" = "" ]; then
+  relno=$(grep -oP '(?<=^VERSION_ID=).+' /etc/os-release | tr -d '"')
+fi
+
+if [ "$relno" = "16" ] || [ "$relno" = "17" ] || [ "$relno" = "9" ]; then
+  phpver=php7.0
+  phploc=/etc/php/7.0
+  libcver=libcurl3
+fi
+
+if [ "$(lsb_release -sr)" = "17.10" ]; then
+  phpver=php7.1
+  phploc=/etc/php/7.1
+  libcver=libcurl3
+fi
+
+if [ "$relno" = "18" ] || [ "$relno" = "19" ]; then
+  phpver=php7.2
+  phploc=/etc/php/7.2
+  libcver=libcurl4
+fi
+
+if [ "$relno" = "10" ]; then
+  phpver=php7.3
+  phploc=/etc/php/7.3
+  libcver=libcurl4
+fi
+
+serveripa=$(ip route get 8.8.8.8 | awk 'NR==1 {print $7}')
+serveripb=$(wget -qO- ipecho.net/plain)
+
+if [ "$serveripa" = "$serveripb" ]; then
+  serverip=$serveripa
+else
+  echo "Select the IP address to use:"
+  echo "1.) "$serveripa
+  echo "2.) "$serveripb
+
+  while true
+    do
+      read answer
+      case $answer in [1] ) serverip=$serveripa && break ;;
+                      [2] ) serverip=$serveripb && break ;;
+                        * ) echo "Enter 1 or 2";;
+    esac
+  done
+fi
+
+echo "IP set to "$serverip
+
+
+export logfile="/dev/null"
+webpass=''
+cronline1="@reboot sleep 10; /usr/local/bin/rtcheck irssi rtorrent"
+cronline2="*/10 * * * * /usr/local/bin/rtcheck irssi rtorrent"
+dlflag=1
+portdefault=1
+
+skip_rt=1
+sshport=''
+rudevflag=1
+rurelease=master
+passfile='/etc/nginx/.htpasswd'
+package_list="sudo nano autoconf build-essential ca-certificates comerr-dev curl dtach htop irssi libcppunit-dev $libcver libncurses5-dev libterm-readline-gnu-perl libsigc++-2.0-dev libperl-dev libtool libxml2-dev ncurses-base ncurses-term ntp patch pkg-config $phpver-fpm $phpver $phpver-cli $phpver-dev $phpver-curl php-geoip $phpver-xmlrpc $phpver-xml python-scgi screen subversion texinfo unzip zlib1g-dev libcurl4-openssl-dev mediainfo software-properties-common aptitude $phpver-json nginx-full apache2-utils git libarchive-zip-perl libnet-ssleay-perl libhtml-parser-perl libxml-libxml-perl libjson-perl libjson-xs-perl libxml-libxslt-perl libjson-rpc-perl libarchive-zip-perl"
+Install_list=""
+unixpass=""
+passflag=0
+forceyes=1
+selfsign=1
+rut_add_users=1
 
 ###############################
 ### FUNCTIONS ###
@@ -15,7 +119,7 @@
 
 #function to check if a web site is reachable
 check_url() {
-  if [[ `wget -S -T 3 --spider $1  2>&1 | grep 'HTTP/1.1 200 OK'` ]]; then return 0; else return 1; fi
+  if [[ `wget -S --spider $1  2>&1 | grep 'HTTP/1.1 200 OK'` ]]; then return 0; else return 1; fi
 }
 
 # checks if an application is installed
@@ -61,12 +165,11 @@ tr -dc A-Za-z0-9 < /dev/urandom | head -c ${genln} | xargs
 
 #function executed if the script finishes early
 early_exit() {
-local rt_ee_version
 echo "Installation is incomplete. Run rtinst again to complete"
 echo
 if hash rtorrent >> /dev/null 2>&1; then
-  rt_ee_version=$(rtorrent -h | grep -om 1 "[0-9]\{1,2\}\.[0-9]\{1,2\}\.[0-9]\{1,2\}")
-  echo "rtorrent $rt_ee_version installed"
+  rt_current=$(rtorrent -h | grep -om 1 "[0-9]\{1,2\}\.[0-9]\{1,2\}\.[0-9]\{1,2\}")
+  echo "rtorrent $rt_current installed"
 else
   echo "rtorrent was not installed"
 fi
@@ -150,137 +253,21 @@ while true
 
 # function to enter IP address
 enter_ip() {
-local ip_address=$1
-
-exec 3>&1 >/dev/tty
-
 while true
   do
-    if valid_ip $ip_address ; then
-      echo "Your Server IP is $ip_address"
+    if valid_ip $serverip ; then
+      echo "Your Server IP is $serverip"
       echo -n "Is this correct y/n? "
-      ask_user && break
+      ask_user && return 0
     else
       echo "Invalid IP address, please try again"
     fi
 
     echo "enter your server's IP address"
     echo "e.g. 213.0.113.113"
-    read ip_address
+    read serverip
   done
-
-exec >&3-
-
-echo $ip_address
 }
-
-
-###############################
-### SET VARIABLES ###
-###############################
-
-PATH=/usr/local/bin:/usr/bin:/usr/local/sbin:/usr/sbin:/bin:/sbin
-
-# if left blank will install latest version of rtorrent, or set to a specific release E.G. '0.9.6' to install that release
-rtorrentrel='0.9.6'
-
-#url's of the major components
-rt_url="http://rtorrent.net/downloads/"
-
-xmlrpc_url="https://svn.code.sf.net/p/xmlrpc-c/code/advanced/"
-xmlrpc_url_alt="https://github.com/mirror/xmlrpc-c"
-
-ru_url="https://github.com/Novik/ruTorrent/"
-adl_url="https://github.com/autodl-community/"
-
-if [ $(dpkg-query -W -f='${Status}' lsb-release 2>/dev/null | grep -c "ok installed") -eq 0 ]; then
-echo "Installing lsb-release"
-apt-get -yqq install lsb-release 2>&1 >> /dev/null
-fi
-
-fullrel=$(lsb_release -sd)
-osname=$(lsb_release -si)
-relno=$(lsb_release -sr | cut -d. -f1)
-
-# Fallback if lsb_release -si returns nothing
-if [ "$osname" = "" ]; then
-  osname=$(grep -oP '(?<=^ID=).+' /etc/os-release | tr -d '"')
-  osname=${osname^}
-fi
-
-# Fallback if lsb_release -sr returns nothing
-if [ "$relno" = "" ]; then
-  relno=$(grep -oP '(?<=^VERSION_ID=).+' /etc/os-release | tr -d '"')
-fi
-
-if [ "$relno" = "16" ] || [ "$relno" = "17" ] || [ "$relno" = "9" ]; then
-  phpver=php7.0
-  phploc=/etc/php/7.0
-  libcver=libcurl3
-fi
-
-if [ "$(lsb_release -sr)" = "17.10" ]; then
-  phpver=php7.1
-  phploc=/etc/php/7.1
-  libcver=libcurl3
-fi
-
-if [ "$relno" = "18" ] || [ "$relno" = "19" ]; then
-  phpver=php7.2
-  phploc=/etc/php/7.2
-  libcver=libcurl4
-fi
-
-if [ "$relno" = "10" ] || [ "$(lsb_release -sr)" = "19.10" ]; then
-  phpver=php7.3
-  phploc=/etc/php/7.3
-  libcver=libcurl4
-fi
-
-serveripa=$(ip route get 8.8.8.8 | awk 'NR==1 {print $7}')
-serveripb=$(wget -qO- --timeout=3 ipecho.net/plain)
-
-if [ "$serveripa" = "$serveripb" ]; then
-  serverip=$serveripa
-else
-  echo "Select the IP address to use:"
-  echo "1.) "$serveripa
-  echo "2.) "$serveripb
-
-  while true
-    do
-      read answer
-      case $answer in [1] ) serverip=$serveripa && break ;;
-                      [2] ) serverip=$serveripb && break ;;
-                        * ) echo "Enter 1 or 2";;
-    esac
-  done
-fi
-
-echo "IP set to "$serverip
-
-
-export logfile="/dev/null"
-webpass=''
-cronline1="@reboot sleep 10; /usr/local/bin/rtcheck irssi rtorrent"
-cronline2="*/10 * * * * /usr/local/bin/rtcheck irssi rtorrent"
-dlflag=1
-portdefault=1
-
-skip_rt=1
-sshport=''
-rudevflag=1
-rurelease=master
-passfile='/etc/nginx/.htpasswd'
-package_list="sudo nano autoconf build-essential ca-certificates comerr-dev curl dtach htop irssi libcppunit-dev $libcver libncurses5-dev libterm-readline-gnu-perl libsigc++-2.0-dev libperl-dev libtool libxml2-dev ncurses-base ncurses-term ntp patch pkg-config $phpver-fpm $phpver $phpver-cli $phpver-dev $phpver-curl php-geoip $phpver-xmlrpc $phpver-xml python-scgi screen subversion texinfo unzip zlib1g-dev libcurl4-openssl-dev mediainfo software-properties-common aptitude $phpver-json nginx-full apache2-utils git libarchive-zip-perl libnet-ssleay-perl libhtml-parser-perl libxml-libxml-perl libjson-perl libjson-xs-perl libxml-libxslt-perl libjson-rpc-perl libarchive-zip-perl"
-Install_list=""
-unixpass=""
-passflag=0
-forceyes=1
-selfsign=1
-rut_add_users=1
-
-
 
 ###############################
 ### INITIAL SYSTEM CHECKS ###
@@ -371,18 +358,21 @@ fi
 echo
 
 # check IP Address
-[ $forceyes = 1 ] && serverip=$(enter_ip $serverip)
+[ $forceyes = 1 ] && enter_ip
 
 echo "Your server's IP is set to $serverip"
 export serverip
 
 # Determine domain name using server ip address
-export serverdn=$(perl -MSocket -le "print((gethostbyaddr(inet_aton('$serverip'), AF_INET))[0])")
-if [ -z "$serverdn" ]; then
-  echo "Unable to determine domain"
-else
-  echo "Your domain is set to $serverdn"
-fi
+echo -n "Do your server has a domain name? "
+    if ask_user; then
+      echo "enter your server's domain name"
+      read serverdn
+      echo "Your domain is set to $serverdn"
+    else
+      echo "Using your server's IP to generate CA"
+    fi
+export serverdn
 
 #check rtorrent installation
 if installed rtorrent; then
@@ -534,7 +524,13 @@ echo
 if [[ $(systemctl list-units --all apt-daily.service | fgrep -c apt-daily.service) -gt 0 ]]; then
   systemctl stop apt-daily.service >> $logfile 2>&1
   systemctl kill --kill-who=all apt-daily.service >> $logfile 2>&1
-  sleep 5
+
+# wait until `apt-get updated` has been killed
+  while ! (systemctl list-units --all apt-daily.service | fgrep -q dead)
+    do
+      sleep 1;
+    done
+
 fi
 
 #update amd upgrade system
@@ -552,7 +548,6 @@ apt-get clean && apt-get autoclean >> $logfile 2>&1
 
 #install the packsges needed
 echo "Installing required packages" | tee -a $logfile
-apt-get install libtool -y >> $logfile 2>&1
 for package_name in $package_list
   do
     if [ $(apt-cache show -q=0 $package_name 2>&1 | grep -c "No packages found") -eq 0 ]; then
@@ -566,7 +561,7 @@ for package_name in $package_list
 
 # Installs a package needed to prevent arm64 architectures from "WARNING: Unable to start rtorrent"
 if [ "$(uname --m)" == "aarch64" ] || [ "$(dpkg --print-architecture)" == "arm64" ] ; then
-    sudo apt-get install libxmlrpc-core-c3-dev -y >> $logfile 2>&1
+    sudo apt-get install libxmlrpc-core-c3-dev
 fi
 
 test -z "$install_list" || apt-get -qq install $install_list >> $logfile 2>&1
@@ -635,51 +630,6 @@ sed -i '$ i\* hard nofile 32768\n* soft nofile 16384' /etc/security/limits.conf
 
 
 ###############################
-### CONFIGURE SSH ###
-###############################
-
-echo "Configuring SSH" | tee -a $logfile
-
-oldsshport=$(grep -P '^[#\s]*Port ' /etc/ssh/sshd_config | sed 's/[^0-9]*//g')
-
-if [ "$portdefault" = "0" ]; then
-  sshport=22
-elif [ "$oldsshport" = "22" ] && [ "$portdefault" = "1" ]; then
-  sshport=$(random 21000 29000)
-else
-  sshport=$oldsshport
-fi
-
-sed -i "/^\(\s\|#\)*Port / c\Port $sshport" /etc/ssh/sshd_config
-sed -i "/^\(\s\|#\)*X11Forwarding /c\X11Forwarding no" /etc/ssh/sshd_config
-sed -i '/^\s*PermitRootLogin/ c\PermitRootLogin no' /etc/ssh/sshd_config
-sed -i '/^\s*PasswordAuthentication no/ c\#PasswordAuthentication no' /etc/ssh/sshd_config
-
-echo >> /etc/ssh/sshd_config
-grep -Pq "^[#\s]*UsePAM" /etc/ssh/sshd_config && sed -i '/^\(\s\|#\)*UsePAM/ c\UsePAM yes' /etc/ssh/sshd_config || echo "UsePAM yes" >> /etc/ssh/sshd_config
-grep -Pq "^[#\s]*UseDNS" /etc/ssh/sshd_config && sed -i '/^\(\s\|#\)*UseDNS/ c\UseDNS no' /etc/ssh/sshd_config || echo "UseDNS no" >> /etc/ssh/sshd_config
-
-if [ -z "$(grep sshuser /etc/group)" ]; then
-groupadd sshuser
-fi
-
-allowlist=$(grep ^AllowUsers /etc/ssh/sshd_config)
-if ! [ -z "$allowlist" ]; then
-  for ssh_user in $allowlist
-    do
-      if   [ ! "$ssh_user" = "AllowUsers" ] && [ "$(groups $ssh_user 2> /dev/null | grep -E ' sudo(\s|$)')" = "" ]; then
-        adduser $ssh_user sshuser
-      fi
-    done
-  sed -i "/$allowlist/ d" /etc/ssh/sshd_config
-fi
-grep "AllowGroups sudo sshuser" /etc/ssh/sshd_config > /dev/null || echo "AllowGroups sudo sshuser" >> /etc/ssh/sshd_config
-
-service ssh restart 1>> $logfile
-sshport=$(grep 'Port ' /etc/ssh/sshd_config | sed 's/[^0-9]*//g')
-echo "SSH port set to $sshport"
-
-###############################
 ### SSL CERTIFICATES ###
 ###############################
 
@@ -698,51 +648,6 @@ fi
 ###############################
 
 ftpport=$(random 41005 48995)
-
-if [ $(dpkg-query -W -f='${Status}' "vsftpd" 2>/dev/null | grep -c "ok installed") -eq 0 ]; then
-  echo "Installing vsftpd" | tee -a $logfile
-  apt-get -y install vsftpd >> $logfile 2>&1
-fi
-
-sed -i '/^\(\s\|#\)*anonymous_enable/ c\anonymous_enable=NO' /etc/vsftpd.conf
-sed -i '/^\(\s\|#\)*local_enable/ c\local_enable=YES' /etc/vsftpd.conf
-sed -i '/^\(\s\|#\)*write_enable/ c\write_enable=YES' /etc/vsftpd.conf
-sed -i '/^\(\s\|#\)*local_umask/ c\local_umask=022' /etc/vsftpd.conf
-sed -i '/^\(\s\|#\)*listen=/ c\listen=YES' /etc/vsftpd.conf
-sed -i '/^\(\s\|#\)*rsa_private_key_file/ c\rsa_private_key_file=\/etc\/ssl\/private\/ruweb\.key' /etc/vsftpd.conf
-sed -i '/^\(\s\|#\)*rsa_cert_file/ c\rsa_cert_file=\/etc\/ssl\/ruweb\.crt' /etc/vsftpd.conf
-
-sed -i 's/^\s*listen_ipv6/#listen_ipv6/g' /etc/vsftpd.conf
-
-grep ^listen_port /etc/vsftpd.conf > /dev/null || echo "listen_port=$ftpport" >> /etc/vsftpd.conf
-
-if [[ $LANG =~ .*[Uu][Tt][Ff]-?8.* ]]; then
-  grep -Pq "utf8_filesystem=" /etc/vsftpd.conf && sed -i '/^\(\s\|#\)*utf8_filesystem=/ c\utf8_filesystem=YES' /etc/vsftpd.conf ||  echo "utf8_filesystem=YES" >> /etc/vsftpd.conf
-fi
-
-
-grep -Pq "use_sendfile=" /etc/vsftpd.conf && sed -i '/^\(\s\|#\)*use_sendfile=/ c\use_sendfile=NO' /etc/vsftpd.conf ||  echo "use_sendfile=NO" >> /etc/vsftpd.conf
-grep -Pq "^\s*ssl_enable" /etc/vsftpd.conf && sed -i '/^\s*ssl_enable/ c\ssl_enable=YES' /etc/vsftpd.conf ||  echo "ssl_enable=YES" >> /etc/vsftpd.conf
-grep -Pq "^\s*chroot_local_user" /etc/vsftpd.conf &&  sed -i '/^\s*chroot_local_user/ c\chroot_local_user=YES' /etc/vsftpd.conf || echo "chroot_local_user=YES" >> /etc/vsftpd.conf
-grep -Pq "^\s*allow_writeable_chroot" /etc/vsftpd.conf &&  sed -i '/^\s*allow_writeable_chroot/ c\allow_writeable_chroot=YES' /etc/vsftpd.conf || echo "allow_writeable_chroot=YES" >> /etc/vsftpd.conf
-grep -Pq "^\s*allow_anon_ssl" /etc/vsftpd.conf && sed -i '/^\s*allow_anon_ssl/ c\allow_anon_ssl=NO' /etc/vsftpd.conf || echo "allow_anon_ssl=NO" >> /etc/vsftpd.conf
-grep -Pq "^\s*force_local_data_ssl" /etc/vsftpd.conf && sed -i '/^\s*force_local_data_ssl/ c\force_local_data_ssl=YES' /etc/vsftpd.conf || echo "force_local_data_ssl=YES" >> /etc/vsftpd.conf
-grep -Pq "^\s*force_local_logins_ssl" /etc/vsftpd.conf && sed -i '/^\s*force_local_logins_ssl/ c\force_local_logins_ssl=YES' /etc/vsftpd.conf || echo "force_local_logins_ssl=YES" >> /etc/vsftpd.conf
-grep -Pq "^\s*ssl_sslv2" /etc/vsftpd.conf &&  sed -i '/^\s*ssl_sslv2/ c\ssl_sslv2=YES' /etc/vsftpd.conf || echo "ssl_sslv2=YES" >> /etc/vsftpd.conf
-grep -Pq "^\s*ssl_sslv3" /etc/vsftpd.conf &&  sed -i '/^\s*ssl_sslv3/ c\ssl_sslv3=YES' /etc/vsftpd.conf || echo "ssl_sslv3=YES" >> /etc/vsftpd.conf
-grep -Pq "^\s*ssl_tlsv1" /etc/vsftpd.conf &&  sed -i '/^\s*ssl_tlsv1/ c\ssl_tlsv1=YES' /etc/vsftpd.conf || echo "ssl_tlsv1=YES" >> /etc/vsftpd.conf
-grep -Pq "^\s*require_ssl_reuse" /etc/vsftpd.conf &&  sed -i '/^\s*require_ssl_reuse/ c\require_ssl_reuse=NO' /etc/vsftpd.conf || echo "require_ssl_reuse=NO" >> /etc/vsftpd.conf
-grep -Pq "^\s*ssl_ciphers" /etc/vsftpd.conf &&  sed -i '/^\s*ssl_ciphers/ c\ssl_ciphers=HIGH' /etc/vsftpd.conf || echo "ssl_ciphers=HIGH" >> /etc/vsftpd.conf
-
-if [ $leflag = 0 ]; then
-  sed -i "/^\(\s\|#\)*rsa_cert_file/ c\rsa_cert_file=/etc/letsencrypt/live/$serverdn/fullchain.pem" /etc/vsftpd.conf
-  sed -i "/^\(\s\|#\)*rsa_private_key_file/ c\rsa_private_key_file=/etc/letsencrypt/live/$serverdn/privkey.pem" /etc/vsftpd.conf
-fi
-
-service vsftpd restart 1>> $logfile
-
-ftpport=$(grep 'listen_port=' /etc/vsftpd.conf | sed 's/[^0-9]*//g')
-echo "FTP port set to $ftpport"
 
 ###############################
 ### INSTALL NGINX ###
@@ -993,7 +898,6 @@ fi
 ### WRITE RTINST.INFO ###
 ###############################
 
-ftp_current=$(apt-cache policy vsftpd | grep -o Installed.* | cut -d ' ' -f2)
 rt_current=$(rtorrent -h | grep -om 1 "[0-9]\{1,2\}\.[0-9]\{1,2\}\.[0-9]\{1,2\}")
 ru_current=$(grep -m 1 version: /var/www/rutorrent/js/webui.js | cut -d \" -f2)
 
@@ -1003,21 +907,7 @@ echo "Summary of Installation (Important Information, please read" | tee $home/r
 
 echo | tee $home/rtinst.info
 
-echo "SSH Configured" | tee -a $home/rtinst.info
-echo "   SSH port set to $sshport" | tee -a $home/rtinst.info
-echo "   root login directly from SSH disabled"
-echo "   login with $user and switch to root using: sudo su"
-
 echo | tee -a $home/rtinst.info
-
-echo "FTP Server"  | tee -a $home/rtinst.info
-if installed vsftpd; then
-  echo "   vsftpd $ftp_current installed" | tee -a $home/rtinst.info
-  echo "   ftp port set to $ftpport" | tee -a $home/rtinst.info
-  echo "   ftp client should be set to explicit ftp over tls using port $ftpport" | tee -a $home/rtinst.info
-else
-  echo "   vsftpd is not installed" | tee -a $home/rtinst.info
-fi
 
 echo | tee -a $home/rtinst.info
 
@@ -1062,9 +952,6 @@ fi
 
 echo | tee -a $home/rtinst.info
 
-echo "IMPORTANT: SSH Port set to $sshport" | tee -a $home/rtinst.info
-echo "IMPORTANT: SSH Port set to $sshport"
-echo "IMPORTANT: SSH Port set to $sshport"
 echo "Please ensure you can login BEFORE closing this session"
 echo
 echo "The above information is stored in rtinst.info in your home directory."
