@@ -364,13 +364,13 @@ echo "Your server's IP is set to $serverip"
 export serverip
 
 # Determine domain name using server ip address
-echo -n "Do your server has a domain name? "
+echo -n "Do your server has a domain name y/n? "
     if ask_user; then
-      echo "enter your server's domain name"
+      echo "Enter your server's domain name:"
       read serverdn
       echo "Your domain is set to $serverdn"
     else
-      echo "Using your server's IP to generate CA"
+      echo "Using your server's IP to generate CA cert"
     fi
 export serverdn
 
