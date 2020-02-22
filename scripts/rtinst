@@ -807,7 +807,6 @@ if [ $osname = "Raspbian" ]; then
   echo 'enabled = no' >> /var/www/rutorrent/conf/plugins.ini
 fi
 
-chmod +x /var/www/rutorrent/share/users/$user/settings/rss
 
 ###############################
 ### INSTALL AUTODL-IRSSI ###
